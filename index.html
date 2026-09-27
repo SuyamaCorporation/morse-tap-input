@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>モールス信号 タップ入力 デコーダー</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  .tap-btn { user-select: none; }
+  .tap-btn:active { transform: scale(0.95); }
+  @keyframes flash { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  .flashing { animation: flash 0.2s ease; }
+</style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen p-4">
+<div class="max-w-3xl mx-auto">
+  <h1 class="text-2xl font-bold text-center mb-2 text-green-400">モールス信号 タップ入力デコーダー</h1>
+  <p class="text-center text-gray-400 text-sm mb-6">スペースキー / ボタンを押して短/長音を入力 | 300ms以下=「.」 / 300ms超=「-」</p>
+
+  <!-- Tap Button -->
+  <div class="flex justify-center mb-6">
+    <button id="tapBtn"
+      class="tap-btn w-48 h-48 rounded-full bg-green-700 hover:bg-green-600 active:bg-green-500 text-white text-3xl font-bold shadow-lg shadow-green-900 border-4 border-green-500 transition-all"
+      aria-label="モールス信号タップボタン">
+      TAP
+    </button>
+  </div>
+
+  <!-- Current Input Display -->
+  <div class="bg-gray-800 rounded-lg p-4 mb-4 text-center">
+    <div class="text-gray-400 text-xs mb-1">入力中のモールスコード</div>
+    <div id="currentMorse" class="text-3xl font-mono text-yellow-400 tracking-widest min-h-[2.5rem]">—</div>
+    <div id="currentChar" class="text-xl text-green-400 mt-1 font-bold">?</div>
+  </div>
+
+  <!-- Decoded Text -->
+  <div class="bg-gray-800 rounded-lg p-4 mb-4">
+    <div class="text-gray-400 text-xs mb-2">デコード済みテキスト</div>
+    <div id="decodedText" class="text-2xl font-mono text-white tracking-widest min-h-[2rem] break-all"> </div>
+    <button id="clearBtn" class="mt-2 px-4 py-1 bg-red-700 hover:bg-red-600 rounded text-sm" aria-label="テキストをクリア">クリア</button>
+  </div>
+
+  <!-- Status -->
+  <div class="text-center text-gray-500 text-sm mb-6" id="statusMsg">タップして入力開始</div>
+
+  <!-- Morse Chart -->
+  <div class="bg-gray-800 rounded-lg p-4 mb-4">
+    <div class="text-gray-400 text-xs mb-3">モールス信号 文字盤</div>
+    <div id="morseChart" class="grid grid-cols-4 sm:grid-cols-6 gap-2 text-xs"></div>
+  </div>
+
+  <!-- History -->
+  <div class="bg-gray-800 rounded-lg p-4">
+    <div class="flex justify-between items-center mb-2">
+      <div class="text-gray-400 text-xs">入力履歴</div>
+      <button id="clearHistoryBtn" class="text-xs text-red-400 hover:text-red-300" aria-label="履歴をクリア">履歴クリア</button>
+    </div>
+    <div id="historyList" class="space-y-1 max-h-40 overflow-y-auto"></div>
+  </div>
+</div>
+
+<script>
+const MORSE_CODE = {
+  '.-':'A','-.-.':'C','-..':'D','.':'E','..-.':'F','--.':'G','....':'H','..':'I',
+  '.---':'J','-.-':'K','.-..':'L','--':'M','-.':'N','---':'O','.--.':'P','--.-':'Q',
+  '.-.':'R','...':'S','-':'T','..-':'U','...-':'V','.--':'W','-..-':'X','-.--':'Y',
+  '--..':'Z','-----':'0','.----':'1','..---':'2','...--':'3','....-':'4',
+  '.....':'5','-....':'6','--...':'7','---..':'8','----.':'9',
+  '.-.-.-':'.','--..--':',','..--..':'?','-.-.--':'!','-....-':'-','.--.-.':'@'
+};
+
+const MORSE_DISPLAY = {
+  'A':'.-','B':'-...','C':'-.-.','D':'-..','E':'.','F':'..-.','G':'--.','H':'....','I':'..','J':'.---',
+  'K':'-.-','L':'.-..','M':'--','N':'-.','O':'---','P':'.--.','Q':'--.-','R':'.-.','S':'...','T':'-',
+  'U':'..-','V':'...-','W':'.--','X':'-..-','Y':'-.--','Z':'--..',
+  '0':'-----','1':'.----','2':'..---','3':'...--','4':'....-','5':'.....','6':'-....','7':'--...','8':'---..','9':'----.'
+};
+
+let pressStart = 0;
+let currentMorse = '';
+let decodedText = '';
+let charTimer = null;
+let wordTimer = null;
+let isPressed = false;
+
+function decode(morse) {
+  return MORSE_CODE[morse] || '?';
+}
+
+function updateDisplay() {
+  const el = document.getElementById('currentMorse');
+  el.textContent = currentMorse || '—';
+  const charEl = document.getElementById('currentChar');
+  charEl.textContent = currentMorse ? (MORSE_CODE[currentMorse] || '?') : '?';
+}
+
+function commitChar() {
+  if (currentMorse) {
+    const ch = decode(currentMorse);
+    decodedText += ch;
+    document.getElementById('decodedText').textContent = decodedText;
+    currentMorse = '';
+    updateDisplay();
+    clearTimeout(wordTimer);
+    wordTimer = setTimeout(() => {
+      decodedText += ' ';
+      document.getElementById('decodedText').textContent = decodedText;
+    }, 700);
+  }
+}
+
+function onPress() {
+  if (isPressed) return;
+  isPressed = true;
+  pressStart = Date.now();
+  clearTimeout(charTimer);
+  clearTimeout(wordTimer);
+  document.getElementById('tapBtn').classList.add('bg-green-500');
+  document.getElementById('statusMsg').textContent = '押し中...';
+}
+
+function onRelease() {
+  if (!isPressed) return;
+  isPressed = false;
+  const duration = Date.now() - pressStart;
+  const symbol = duration < 300 ? '.' : '-';
+  currentMorse += symbol;
+  document.getElementById('tapBtn').classList.remove('bg-green-500');
+  document.getElementById('statusMsg').textContent = `入力: ${symbol === '.' ? '短音 (.)' : '長音 (-)'}`;
+  document.getElementById('tapBtn').classList.add('flashing');
+  setTimeout(() => document.getElementById('tapBtn').classList.remove('flashing'), 200);
+  updateDisplay();
+  clearTimeout(charTimer);
+  charTimer = setTimeout(commitChar, 300);
+}
+
+// Tap Button
+const tapBtn = document.getElementById('tapBtn');
+tapBtn.addEventListener('mousedown', onPress);
+tapBtn.addEventListener('mouseup', onRelease);
+tapBtn.addEventListener('touchstart', (e) => { e.preventDefault(); onPress(); }, {passive: false});
+tapBtn.addEventListener('touchend', (e) => { e.preventDefault(); onRelease(); }, {passive: false});
+
+// Spacebar
+window.addEventListener('keydown', (e) => { if (e.code === 'Space' && !e.repeat) { e.preventDefault(); onPress(); } });
+window.addEventListener('keyup', (e) => { if (e.code === 'Space') { e.preventDefault(); onRelease(); } });
+
+// Clear
+document.getElementById('clearBtn').addEventListener('click', () => {
+  saveHistory(decodedText);
+  decodedText = '';
+  currentMorse = '';
+  document.getElementById('decodedText').textContent = ' ';
+  updateDisplay();
+});
+
+document.getElementById('clearHistoryBtn').addEventListener('click', () => {
+  localStorage.removeItem('morseHistory');
+  renderHistory();
+});
+
+// History
+function saveHistory(text) {
+  const trimmed = text.trim();
+  if (!trimmed) return;
+  let hist = JSON.parse(localStorage.getItem('morseHistory') || '[]');
+  hist.unshift({ text: trimmed, time: new Date().toLocaleTimeString('ja-JP') });
+  hist = hist.slice(0, 20);
+  localStorage.setItem('morseHistory', JSON.stringify(hist));
+  renderHistory();
+}
+
+function renderHistory() {
+  const hist = JSON.parse(localStorage.getItem('morseHistory') || '[]');
+  const el = document.getElementById('historyList');
+  el.innerHTML = '';
+  if (hist.length === 0) {
+    const d = document.createElement('div');
+    d.className = 'text-gray-500 text-xs';
+    d.textContent = '履歴なし';
+    el.appendChild(d);
+    return;
+  }
+  hist.forEach(h => {
+    const d = document.createElement('div');
+    d.className = 'flex justify-between text-xs bg-gray-700 rounded px-2 py-1';
+    const t = document.createElement('span');
+    t.className = 'font-mono text-green-300';
+    t.textContent = h.text;
+    const ts = document.createElement('span');
+    ts.className = 'text-gray-500 ml-2';
+    ts.textContent = h.time;
+    d.appendChild(t);
+    d.appendChild(ts);
+    el.appendChild(d);
+  });
+}
+
+// Build Chart
+function buildChart() {
+  const chart = document.getElementById('morseChart');
+  const letters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.split('');
+  letters.forEach(ch => {
+    const morse = MORSE_DISPLAY[ch];
+    if (!morse) return;
+    const d = document.createElement('div');
+    d.className = 'bg-gray-700 rounded p-1 text-center';
+    const letter = document.createElement('div');
+    letter.className = 'text-green-400 font-bold';
+    letter.textContent = ch;
+    const code = document.createElement('div');
+    code.className = 'text-yellow-300 font-mono';
+    code.textContent = morse;
+    d.appendChild(letter);
+    d.appendChild(code);
+    chart.appendChild(d);
+  });
+}
+
+buildChart();
+renderHistory();
+</script>
+</body>
+</html>
